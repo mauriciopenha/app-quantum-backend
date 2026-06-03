@@ -1,0 +1,12 @@
+# Ignorar el entorno virtual
+env/
+venv/
+ENV/
+
+# Ignorar la base de datos local (para que no se suban tus registros reales a Git)
+*.sqlite3
+
+# Ignorar archivos temporales y carpetas de caché de Python
+__pycache__/
+*.pyc
+.pytest_cache/
