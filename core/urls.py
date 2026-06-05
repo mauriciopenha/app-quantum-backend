@@ -12,7 +12,8 @@ from inventario.views import (
     MaterialesPorProyectoView,
     ProyectosPorMaterialView,
     CrearMaterialCatalogoView,
-    CrearProyectoRapidoView
+    CrearProyectoRapidoView,
+    DetalleChecklistProyectoView
 )
 
 urlpatterns = [
@@ -23,6 +24,7 @@ urlpatterns = [
 
     # NUEVA RUTA DE PROYECTOS RÁPIDOS
     path('api/inventario/proyectos/crear/', CrearProyectoRapidoView.as_view(), name='crear-proyecto-rapido'),
+
     
     # Rutas del Token (Login)
     path('api/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
@@ -41,4 +43,7 @@ urlpatterns = [
     
     #¿En qué proyectos está este material específico?
     path('api/inventario/materiales/<int:material_id>/proyectos/', ProyectosPorMaterialView.as_view(), name='proyectos_por_material'),
+
+    path('api/inventario/proyectos/', ListarProyectosView.as_view(), name='listar-proyectos'),
+    path('api/inventario/proyectos/<int:proyecto_id>/checklist/', DetalleChecklistProyectoView.as_view(), name='detalle-checklist-proyecto'),
 ]
