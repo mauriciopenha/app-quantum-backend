@@ -3,6 +3,8 @@ from django.db import models
 from django.contrib.auth.models import User
 from django.utils import timezone
 from datetime import datetime, time
+from django.db.models.signals import post_save
+from django.dispatch import receiver
 
 
 
@@ -153,9 +155,6 @@ class Asistencia(models.Model):
     
 
 # LOGICA ACTULIZACION DE MATERIAL
-
-from django.db.models.signals import post_save
-from django.dispatch import receiver
 
 @receiver(post_save, sender=MovimientoMaterial)
 def actualizar_inventario_material(sender, instance, created, **kwargs):

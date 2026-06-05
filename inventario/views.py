@@ -106,7 +106,9 @@ class HistorialAsistenciaView(APIView):
                     "fecha_hora": fecha_local.strftime("%d/%m/%Y %I:%M %p"),
                     "horas_normales": "Calculado al cierre",
                     "horas_extras": "Calculado al cierre",
-                    "detalle_dia": detalle
+                    "detalle_dia": detalle,
+                    "latitud": registro.latitud,   
+                    "longitud": registro.longitud  
                 })
             
             return Response(historial_data, status=status.HTTP_200_OK)
@@ -288,7 +290,6 @@ class MaterialesPorProyectoView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-
 class ListarProyectosView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -421,5 +422,96 @@ class CrearProyectoRapidoView(APIView):
             print(f"Error al crear proyecto: {str(e)}")
             return Response(
                 {"error": "Error interno al registrar el proyecto."}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        
+
+class DetalleChecklistProyectoView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, proyecto_id):
+        try:
+            # 1. Buscamos el proyecto con sus etapas relacionadas
+            try:
+                proyecto = Proyecto.objects.get(id=proyecto_id)
+            except Proyecto.DoesNotExist:
+                return Response({"error": "El proyecto especificado no existe."}, status=status.HTTP_404_NOT_FOUND)
+
+            # 2. Traemos todas las etapas asociadas a este proyecto
+            etapas = proyecto.etapas.all().order_by('id')
+            
+            etapas_data = []
+            for etapa in etapas:
+                etapas_data.append({
+                    "id": etapa.id,
+                    "nombre_etapa": etapa.nombre_etapa,
+                    "porcentaje_avance": etapa.porcentaje_avance,
+                    "notas_progreso": etapa.notas_progreso or "",
+                    "estado_color": etapa.get_estado_color()  # Reutiliza el método de tu modelo ('ROJO', 'NARANJA', 'VERDE')
+                })
+
+            # 3. Retornamos un JSON completo ideal para armar la interfaz móvil
+            return Response({
+                "proyecto_id": proyecto.id,
+                "proyecto_nombre": proyecto.nombre,
+                "descripcion": proyecto.descripcion or "",
+                "activo": proyecto.activo,
+                "checklist": etapas_data
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            print(f"Error al obtener el checklist del proyecto: {str(e)}")
+            return Response(
+                {"error": "Error interno al procesar el checklist del proyecto."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    def post(self, request, proyecto_id):
+        """ Endpoint para que el técnico actualice el avance de una etapa específica """
+        try:
+            etapa_id = request.data.get('etapa_id')
+            nuevo_porcentaje = request.data.get('porcentaje_avance')
+            nuevas_notas = request.data.get('notas_progreso', None)
+
+            if etapa_id is None or nuevo_porcentaje is None:
+                return Response(
+                    {"error": "Los campos 'etapa_id' y 'porcentaje_avance' son obligatorios."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Validar que la etapa pertenezca al proyecto correcto
+            try:
+                etapa = EtapaProyecto.objects.get(id=etapa_id, proyecto_id=proyecto_id)
+            except EtapaProyecto.DoesNotExist:
+                return Response(
+                    {"error": "La etapa especificada no existe o no corresponde a este proyecto."},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            # Forzar límites del porcentaje
+            try:
+                progreso = int(nuevo_porcentaje)
+                if progreso < 0 or progreso > 100:
+                    return Response({"error": "El porcentaje debe estar entre 0 y 100."}, status=status.HTTP_400_BAD_REQUEST)
+            except ValueError:
+                return Response({"error": "El porcentaje debe ser un número entero válido."}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Actualizamos los campos
+            etapa.porcentaje_avance = progreso
+            if nuevas_notas is not None:
+                etapa.notes_progreso = nuevas_notas.strip()
+            etapa.save()
+
+            return Response({
+                "mensaje": "¡Progreso de la etapa actualizado correctamente!",
+                "etapa_id": etapa.id,
+                "nuevo_porcentaje": etapa.porcentaje_avance,
+                "nuevo_estado_color": etapa.get_estado_color()
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            print(f"Error al actualizar el checklist: {str(e)}")
+            return Response(
+                {"error": "Error interno al guardar los cambios del progreso."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
