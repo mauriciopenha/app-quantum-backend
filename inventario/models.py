@@ -41,6 +41,29 @@ class EtapaProyecto(models.Model):
 
     def __str__(self):
         return f"{self.proyecto.nombre} - {self.nombre_etapa} ({self.porcentaje_avance}%)"
+    
+@receiver(post_save, sender=Proyecto)
+def crear_etapas_proyecto_automaticas(sender, instance, created, **kwargs):
+    """
+    Cada vez que se crea un proyecto nuevo, se le asignan automáticamente
+    las 6 etapas estándar de una instalación solar.
+    """
+    if created:
+        etapas_estandar = [
+            "Estructura de soporte para paneles",
+            "Instalación física de paneles solares",
+            "Conexión eléctrica en DC (Corriente Continua)",
+            "Instalación y montaje de inversor",
+            "Conexión eléctrica en AC (Corriente Alterna)",
+            "Sistema de puesta a tierra",
+        ]
+        
+        for etapa in etapas_estandar:
+            EtapaProyecto.objects.create(
+                proyecto=instance,
+                nombre_etapa=etapa,
+                porcentaje_avance=0
+            )
 
 # MATERIALES
 
@@ -87,7 +110,30 @@ class MovimientoMaterial(models.Model):
     def __str__(self):
         destino = self.proyecto.nombre if self.proyecto else "Bodega Principal"
         return f"{self.tipo} - {self.cantidad} {self.material.nombre} -> {destino}"
-    
+
+# LOGICA ACTULIZACION DE MATERIAL
+@receiver(post_save, sender=MovimientoMaterial)
+def actualizar_inventario_material(sender, instance, created, **kwargs):
+    """
+    Se activa automáticamente cada vez que se registra un movimiento de material.
+    Suma o resta el stock de la bodega según el tipo de movimiento.
+    """
+    if created:  # Solo se ejecuta cuando el movimiento es NUEVO
+        material = instance.material
+        
+        if instance.tipo == 'ENTRADA_BODEGA':
+            material.stock_bodega += instance.cantidad
+            
+        elif instance.tipo == 'SALIDA_PROYECTO':
+            # Nota: Más adelante podemos validar que no saquen más de lo que hay
+            material.stock_bodega -= instance.cantidad
+            
+        elif instance.tipo == 'DEVOLUCION_PROYECTO':
+            material.stock_bodega += instance.cantidad
+            
+        # Guardamos los cambios en el material
+        material.save()
+
 
 # HERRAMIENTAS
 
@@ -130,8 +176,27 @@ class TransaccionHerramienta(models.Model):
     def __str__(self):
         return f"Traspaso de {self.herramienta.nombre} - Estado: {self.estado}"
 
-# GEOLOCALIZACION
+# PRESTAMOS DE HERRAMIENTA
+@receiver(post_save, sender=TransaccionHerramienta)
+def procesar_traspaso_herramienta(sender, instance, created, **kwargs):
+    """
+    Se activa cuando se crea o actualiza un traspaso de herramienta.
+    Solo cambia el dueño real de la herramienta cuando el estado pasa a 'ACEPTADO'.
+    """
+    # Si la transacción fue aceptada
+    if instance.estado == 'ACEPTADO':
+        herramienta = instance.herramienta
+        
+        # Hacemos el cambio oficial de dueño y proyecto
+        herramienta.tecnico_actual = instance.tecnico_destino
+        herramienta.proyecto_actual = instance.proyecto
+        herramienta.en_bodega = False  # Ya está en manos de un técnico en campo
+        
+        # Guardamos los cambios en la herramienta
+        herramienta.save()
 
+
+# GEOLOCALIZACION
 class Asistencia(models.Model):
     TIPO_MARCACION = [
         ('ENTRADA', 'Marcación de Entrada'),
@@ -154,53 +219,7 @@ class Asistencia(models.Model):
         return f"{self.usuario.username} - {self.tipo} - {self.fecha_hora.strftime('%d/%m/%Y %H:%M')}"
     
 
-# LOGICA ACTULIZACION DE MATERIAL
-
-@receiver(post_save, sender=MovimientoMaterial)
-def actualizar_inventario_material(sender, instance, created, **kwargs):
-    """
-    Se activa automáticamente cada vez que se registra un movimiento de material.
-    Suma o resta el stock de la bodega según el tipo de movimiento.
-    """
-    if created:  # Solo se ejecuta cuando el movimiento es NUEVO
-        material = instance.material
-        
-        if instance.tipo == 'ENTRADA_BODEGA':
-            material.stock_bodega += instance.cantidad
-            
-        elif instance.tipo == 'SALIDA_PROYECTO':
-            # Nota: Más adelante podemos validar que no saquen más de lo que hay
-            material.stock_bodega -= instance.cantidad
-            
-        elif instance.tipo == 'DEVOLUCION_PROYECTO':
-            material.stock_bodega += instance.cantidad
-            
-        # Guardamos los cambios en el material
-        material.save()
-
-
-# PRESTAMOS DE HERRAMIENTA
-
-@receiver(post_save, sender=TransaccionHerramienta)
-def procesar_traspaso_herramienta(sender, instance, created, **kwargs):
-    """
-    Se activa cuando se crea o actualiza un traspaso de herramienta.
-    Solo cambia el dueño real de la herramienta cuando el estado pasa a 'ACEPTADO'.
-    """
-    # Si la transacción fue aceptada
-    if instance.estado == 'ACEPTADO':
-        herramienta = instance.herramienta
-        
-        # Hacemos el cambio oficial de dueño y proyecto
-        herramienta.tecnico_actual = instance.tecnico_destino
-        herramienta.proyecto_actual = instance.proyecto
-        herramienta.en_bodega = False  # Ya está en manos de un técnico en campo
-        
-        # Guardamos los cambios en la herramienta
-        herramienta.save()
-
 #CALCULAR HORAS EXTRAS
-
 @receiver(post_save, sender=Asistencia)
 def calcular_horas_jornada(sender, instance, created, **kwargs):
     """
@@ -238,30 +257,6 @@ def calcular_horas_jornada(sender, instance, created, **kwargs):
             Asistencia.objects.filter(id=instance.id).update(
                 horas_totales_dia=round(horas_laboradas, 2),
                 horas_extras_dia=round(horas_extras, 2)
-            )
-
-
-@receiver(post_save, sender=Proyecto)
-def crear_etapas_proyecto_automaticas(sender, instance, created, **kwargs):
-    """
-    Cada vez que se crea un proyecto nuevo, se le asignan automáticamente
-    las 6 etapas estándar de una instalación solar.
-    """
-    if created:
-        etapas_estandar = [
-            "Estructura de soporte para paneles",
-            "Instalación física de paneles solares",
-            "Conexión eléctrica en DC (Corriente Continua)",
-            "Instalación y montaje de inversor",
-            "Conexión eléctrica en AC (Corriente Alterna)",
-            "Sistema de puesta a tierra",
-        ]
-        
-        for etapa in etapas_estandar:
-            EtapaProyecto.objects.create(
-                proyecto=instance,
-                nombre_etapa=etapa,
-                porcentaje_avance=0
             )
 
 

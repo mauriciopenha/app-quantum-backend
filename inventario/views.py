@@ -7,7 +7,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
 from django.db import transaction  # <-- IMPORTANTE: Para asegurar que se guarden todos los ítems o ninguno
 import holidays
-from .models import Material, Asistencia, MovimientoMaterial, Proyecto, MaterialCompraDirecta
+from .models import Material, Asistencia, MovimientoMaterial, Proyecto, MaterialCompraDirecta, EtapaProyecto
 from .serializers import MaterialSerializer, MovimientoMaterialSerializer
 from decimal import Decimal, InvalidOperation
 
@@ -425,6 +425,7 @@ class CrearProyectoRapidoView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
         
+# CHECKLIST PARA MONITOREAR PROYECTOS.
 
 class DetalleChecklistProyectoView(APIView):
     permission_classes = [IsAuthenticated]
@@ -467,7 +468,7 @@ class DetalleChecklistProyectoView(APIView):
             )
 
     def post(self, request, proyecto_id):
-        """ Endpoint para que el técnico actualice el avance de una etapa específica """
+        """ Endpoint para que el técnico actualice el avance y sume su bitácora diaria """
         try:
             etapa_id = request.data.get('etapa_id')
             nuevo_porcentaje = request.data.get('porcentaje_avance')
@@ -492,20 +493,36 @@ class DetalleChecklistProyectoView(APIView):
             try:
                 progreso = int(nuevo_porcentaje)
                 if progreso < 0 or progreso > 100:
-                    return Response({"error": "El porcentaje debe estar entre 0 y 100."}, status=status.HTTP_400_BAD_REQUEST)
+                    return Response({"error": "El porcentaje debe estar entre 0 a 100."}, status=status.HTTP_400_BAD_REQUEST)
             except ValueError:
                 return Response({"error": "El porcentaje debe ser un número entero válido."}, status=status.HTTP_400_BAD_REQUEST)
 
-            # Actualizamos los campos
+            # Actualizamos el porcentaje de avance
             etapa.porcentaje_avance = progreso
-            if nuevas_notas is not None:
-                etapa.notes_progreso = nuevas_notas.strip()
+
+            # 🛠️ BITÁCORA ACUMULATIVA: Si el usuario escribió una labor, la sumamos al historial existente
+            if nuevas_notas and nuevas_notas.strip():
+                from django.utils import timezone
+                # Formateamos la fecha actual (Ej: 06/Jun)
+                fecha_hoy = timezone.localtime(timezone.now()).strftime('%d/%b')
+                
+                # Construimos la nueva entrada de la bitácora
+                nueva_entrada = f"[{fecha_hoy}]: {nuevas_notas.strip()}"
+                
+                if etapa.notas_progreso:
+                    # Si ya existían notas, agregamos un salto de línea y sumamos la nueva labor arriba
+                    etapa.notas_progreso = f"{nueva_entrada}\n{etapa.notas_progreso}"
+                else:
+                    etapa.notas_progreso = nueva_entrada
+
+            # 🟢 CORRECCIÓN: Usamos el nombre exacto del modelo: notas_progreso
             etapa.save()
 
             return Response({
                 "mensaje": "¡Progreso de la etapa actualizado correctamente!",
                 "etapa_id": etapa.id,
                 "nuevo_porcentaje": etapa.porcentaje_avance,
+                "nuevas_notas": etapa.notas_progreso,
                 "nuevo_estado_color": etapa.get_estado_color()
             }, status=status.HTTP_200_OK)
 
@@ -514,4 +531,4 @@ class DetalleChecklistProyectoView(APIView):
             return Response(
                 {"error": "Error interno al guardar los cambios del progreso."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+                )
