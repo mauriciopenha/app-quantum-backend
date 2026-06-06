@@ -7,7 +7,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
 from django.db import transaction  # <-- IMPORTANTE: Para asegurar que se guarden todos los ítems o ninguno
 import holidays
-from .models import Material, Asistencia, MovimientoMaterial, Proyecto, MaterialCompraDirecta, EtapaProyecto
+from .models import Material, Asistencia, MovimientoMaterial, Proyecto, MaterialCompraDirecta, EtapaProyecto, ReporteAvanceDiario
 from .serializers import MaterialSerializer, MovimientoMaterialSerializer
 from decimal import Decimal, InvalidOperation
 
@@ -432,64 +432,67 @@ class DetalleChecklistProyectoView(APIView):
 
     def get(self, request, proyecto_id):
         try:
-            # 1. Buscamos el proyecto con sus etapas relacionadas
             try:
                 proyecto = Proyecto.objects.get(id=proyecto_id)
             except Proyecto.DoesNotExist:
                 return Response({"error": "El proyecto especificado no existe."}, status=status.HTTP_404_NOT_FOUND)
 
-            # 2. Traemos todas las etapas asociadas a este proyecto
             etapas = proyecto.etapas.all().order_by('id')
             
             etapas_data = []
             for etapa in etapas:
+                # 🔍 Buscamos el último reporte físico guardado para esta etapa exacta
+                ultimo_reporte = ReporteAvanceDiario.objects.filter(etapa=etapa).order_by('-fecha_reporte').first()
+                
+                foto_url = None
+                # Si existe el reporte y el usuario adjuntó una foto, construimos su URL absoluta para el celular
+                if ultimo_reporte and ultimo_reporte.foto_evidencia:
+                    foto_url = request.build_absolute_uri(ultimo_reporte.foto_evidencia.url)
+
                 etapas_data.append({
                     "id": etapa.id,
                     "nombre_etapa": etapa.nombre_etapa,
                     "porcentaje_avance": etapa.porcentaje_avance,
-                    "notas_progreso": etapa.notas_progreso or "",
-                    "estado_color": etapa.get_estado_color()  # Reutiliza el método de tu modelo ('ROJO', 'NARANJA', 'VERDE')
+                    "estado_color": etapa.get_estado_color(), # Mantiene el control de colores original (Rojo, Naranja, Verde)
+                    # 📸 Inyectamos de forma segura las notas y la imagen al diccionario
+                    "notas_progreso": ultimo_reporte.nota_labor if ultimo_reporte else "",
+                    "foto_evidencia_url": foto_url
                 })
 
-            # 3. Retornamos un JSON completo ideal para armar la interfaz móvil
             return Response({
                 "proyecto_id": proyecto.id,
                 "proyecto_nombre": proyecto.nombre,
                 "descripcion": proyecto.descripcion or "",
                 "activo": proyecto.activo,
-                "checklist": etapas_data
+                "checklist": etapas_data # Tarjetas con sus metadatos de visualización integrados
             }, status=status.HTTP_200_OK)
 
         except Exception as e:
-            print(f"Error al obtener el checklist del proyecto: {str(e)}")
-            return Response(
-                {"error": "Error interno al procesar el checklist del proyecto."},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+            print(f"Error al obtener el checklist: {str(e)}")
+            return Response({"error": "Error interno al procesar el checklist."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
     def post(self, request, proyecto_id):
-        """ Endpoint para que el técnico actualice el avance y sume su bitácora diaria """
+        """ Registra el avance diario, guarda la labor e indexa fotos/videos """
         try:
             etapa_id = request.data.get('etapa_id')
             nuevo_porcentaje = request.data.get('porcentaje_avance')
-            nuevas_notas = request.data.get('notas_progreso', None)
+            nuevas_notas = request.data.get('notas_progreso', '').strip()
+            
+            # Captura de archivos multimedia enviados desde el celular
+            archivo_foto = request.FILES.get('foto', None)
+            archivo_video = request.FILES.get('video', None)
 
             if etapa_id is None or nuevo_porcentaje is None:
-                return Response(
-                    {"error": "Los campos 'etapa_id' y 'porcentaje_avance' son obligatorios."},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+                return Response({"error": "Los campos 'etapa_id' y 'porcentaje_avance' son obligatorios."}, status=status.HTTP_400_BAD_REQUEST)
 
-            # Validar que la etapa pertenezca al proyecto correcto
+            # [EXCEPT 1] Validar si existe la etapa
             try:
                 etapa = EtapaProyecto.objects.get(id=etapa_id, proyecto_id=proyecto_id)
             except EtapaProyecto.DoesNotExist:
-                return Response(
-                    {"error": "La etapa especificada no existe o no corresponde a este proyecto."},
-                    status=status.HTTP_404_NOT_FOUND
-                )
+                return Response({"error": "La etapa especificada no existe en este proyecto."}, status=status.HTTP_404_NOT_FOUND)
 
-            # Forzar límites del porcentaje
+            # [EXCEPT 2 y 3] Validar que el porcentaje sea un número correcto
             try:
                 progreso = int(nuevo_porcentaje)
                 if progreso < 0 or progreso > 100:
@@ -497,38 +500,39 @@ class DetalleChecklistProyectoView(APIView):
             except ValueError:
                 return Response({"error": "El porcentaje debe ser un número entero válido."}, status=status.HTTP_400_BAD_REQUEST)
 
-            # Actualizamos el porcentaje de avance
+            # 1. Actualizamos el estado de la tarjeta principal
             etapa.porcentaje_avance = progreso
-
-            # 🛠️ BITÁCORA ACUMULATIVA: Si el usuario escribió una labor, la sumamos al historial existente
-            if nuevas_notas and nuevas_notas.strip():
-                from django.utils import timezone
-                # Formateamos la fecha actual (Ej: 06/Jun)
-                fecha_hoy = timezone.localtime(timezone.now()).strftime('%d/%b')
-                
-                # Construimos la nueva entrada de la bitácora
-                nueva_entrada = f"[{fecha_hoy}]: {nuevas_notas.strip()}"
-                
-                if etapa.notas_progreso:
-                    # Si ya existían notas, agregamos un salto de línea y sumamos la nueva labor arriba
-                    etapa.notas_progreso = f"{nueva_entrada}\n{etapa.notas_progreso}"
-                else:
-                    etapa.notas_progreso = nueva_entrada
-
-            # 🟢 CORRECCIÓN: Usamos el nombre exacto del modelo: notas_progreso
             etapa.save()
 
+            # 🛡️ SEGURIDAD: Validamos si el usuario viene en la petición, si no, lo dejamos null para que no rompa
+            user_registra = request.user if request.user.is_authenticated else None
+
+            # 2. Creamos el reporte diario independiente con su evidencia
+            ReporteAvanceDiario.objects.create(
+                etapa=etapa,
+                usuario=user_registra,
+                porcentaje_al_momento=progreso,
+                nota_labor=nuevas_notas if nuevas_notas else "Avance actualizado sin comentarios adicionales.",
+                foto_evidencia=archivo_foto,
+                video_evidencia=archivo_video
+            )
+
+            # Determinamos el nuevo estado de color para responderle al frontend
+            color_final = "ROJO"
+            if progreso >= 100:
+                color_final = "VERDE"
+            elif progreso > 0:
+                color_final = "NARANJA"
+
             return Response({
-                "mensaje": "¡Progreso de la etapa actualizado correctamente!",
-                "etapa_id": etapa.id,
-                "nuevo_porcentaje": etapa.porcentaje_avance,
-                "nuevas_notas": etapa.notas_progreso,
-                "nuevo_estado_color": etapa.get_estado_color()
+                "mensaje": "¡Éxito! El reporte de labor diaria y el avance fueron registrados.",
+                "nuevo_porcentaje": progreso,
+                "nuevo_estado_color": color_final
             }, status=status.HTTP_200_OK)
 
+        # [EXCEPT 4 - EL GLOBAL] ¡Aquí es donde atrapamos el error 500 real!
         except Exception as e:
-            print(f"Error al actualizar el checklist: {str(e)}")
-            return Response(
-                {"error": "Error interno al guardar los cambios del progreso."},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-                )
+            import traceback
+            print("❌ ERROR REAL EN EL BACKEND AL GUARDAR FOTO:")
+            print(traceback.format_exc()) # Esto te pintará en la consola la línea exacta que falló
+            return Response({"error": f"Error interno en el servidor: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

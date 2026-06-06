@@ -271,3 +271,22 @@ class MaterialCompraDirecta(models.Model):
 
     def __str__(self):
         return f"{self.nombre_material} (x{self.cantidad}) - Proyecto: {self.proyecto.nombre}"
+    
+
+
+class ReporteAvanceDiario(models.Model):
+    etapa = models.ForeignKey(EtapaProyecto, on_delete=models.CASCADE, related_name='reportes_diarios')
+    usuario = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, help_text="Técnico que reporta")
+    fecha_reporte = models.DateTimeField(auto_now_add=True)
+    porcentaje_al_momento = models.IntegerField(help_text="Porcentaje guardado en este día")
+    nota_labor = models.TextField(help_text="Descripción de la labor del día")
+    
+    # Soporte multimedia premium (Fotos y Videos)
+    foto_evidencia = models.ImageField(upload_to='evidencias/fotos/%Y/%m/%d/', null=True, blank=True)
+    video_evidencia = models.FileField(upload_to='evidencias/videos/%Y/%m/%d/', null=True, blank=True)
+
+    class Meta:
+        ordering = ['-fecha_reporte'] # El reporte más reciente saldrá de primero
+
+    def __str__(self):
+        return f"{self.etapa.nombre_etapa} - {self.fecha_reporte.strftime('%d/%m/%Y')}"
