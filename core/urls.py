@@ -15,16 +15,18 @@ from inventario.views import (
     CrearProyectoRapidoView,
     DetalleChecklistProyectoView
 )
+# 🔥 IMPORTACIONES PARA CONFIGURAR ARCHIVOS MULTIMEDIA
+from django.conf import settings
+from django.conf.urls.static import static
 
 urlpatterns = [
     path('admin/', admin.site.urls),
 
-    #Crear material
+    # Crear material
     path('api/inventario/materiales/crear/', CrearMaterialCatalogoView.as_view(), name='crear-material-catalogo'),
 
     # NUEVA RUTA DE PROYECTOS RÁPIDOS
     path('api/inventario/proyectos/crear/', CrearProyectoRapidoView.as_view(), name='crear-proyecto-rapido'),
-
     
     # Rutas del Token (Login)
     path('api/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
@@ -41,9 +43,13 @@ urlpatterns = [
     # Reportes cruzados (Materiales <-> Proyectos)
     path('api/inventario/proyectos/<int:proyecto_id>/materiales/', MaterialesPorProyectoView.as_view(), name='materiales_por_proyecto'),
     
-    #¿En qué proyectos está este material específico?
+    # ¿En qué proyectos está este material específico?
     path('api/inventario/materiales/<int:material_id>/proyectos/', ProyectosPorMaterialView.as_view(), name='proyectos_por_material'),
 
     path('api/inventario/proyectos/', ListarProyectosView.as_view(), name='listar-proyectos'),
     path('api/inventario/proyectos/<int:proyecto_id>/checklist/', DetalleChecklistProyectoView.as_view(), name='detalle-checklist-proyecto'),
 ]
+
+# 🔥 LÓGICA QUE ENLAZA LAS IMÁGENES AL SERVIDOR EN DESARROLLO (Resuelve el recuadro blanco)
+if settings.DEBUG:
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
