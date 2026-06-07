@@ -7,7 +7,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
 from django.db import transaction  # <-- IMPORTANTE: Para asegurar que se guarden todos los ítems o ninguno
 import holidays
-from .models import Material, Asistencia, MovimientoMaterial, Proyecto, MaterialCompraDirecta, EtapaProyecto, ReporteAvanceDiario
+from .models import Material, Asistencia, MovimientoMaterial, Proyecto, FotoEvidenciaReporte, MaterialCompraDirecta, EtapaProyecto, ReporteAvanceDiario
 from .serializers import MaterialSerializer, MovimientoMaterialSerializer
 from decimal import Decimal, InvalidOperation
 
@@ -425,9 +425,9 @@ class CrearProyectoRapidoView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
         
-# =====================================================================
-# CHECKLIST PARA MONITOREAR PROYECTOS (MÉTODO GET Y POST CORREGIDOS)
-# =====================================================================
+# ====================================
+# CHECKLIST PARA MONITOREAR PROYECTOS 
+# ====================================
 class DetalleChecklistProyectoView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -448,18 +448,25 @@ class DetalleChecklistProyectoView(APIView):
                 
                 historial_reportes = []
                 for rep in reportes_queryset:
+                    # 1. Foto antigua por retrocompatibilidad
                     foto_url = request.build_absolute_uri(rep.foto_evidencia.url) if rep.foto_evidencia else None
                     
-                    # Generamos una estructura limpia para el carrusel en la App Móvil usando la foto actual
-                    lista_fotos = [foto_url] if foto_url else []
+                    # 2. Construir lista_fotos consultando la nueva tabla relacional
+                    lista_fotos = []
+                    if foto_url:
+                        lista_fotos.append(foto_url)
+                    
+                    # Traemos todas las fotos asociadas a este reporte específico
+                    for foto_obj in rep.fotos_adicionales.all():
+                        lista_fotos.append(request.build_absolute_uri(foto_obj.foto.url))
                     
                     historial_reportes.append({
                         "id": rep.id,
                         "fecha_reporte": rep.fecha_reporte.strftime('%Y-%m-%d') if rep.fecha_reporte else "Sin fecha",
                         "porcentaje_al_momento": rep.porcentaje_al_momento,
                         "nota_labor": rep.nota_labor or "Sin observaciones registradas.",
-                        "foto_evidencia_url": foto_url,       # Campo base de tu vista
-                        "fotos_urls": lista_fotos             # Formato lista listo para carrusel en el móvil
+                        "foto_evidencia_url": foto_url,       # Se mantiene por si el frontend viejo lo usa
+                        "fotos_urls": lista_fotos             # 🔥 Array REAL con todas las fotos para el carrusel
                     })
 
                 ultimo_reporte = reportes_queryset.first()
@@ -480,7 +487,14 @@ class DetalleChecklistProyectoView(APIView):
             informe_general_data = []
             for rep in todos_los_reportes:
                 foto_url = request.build_absolute_uri(rep.foto_evidencia.url) if rep.foto_evidencia else None
-                lista_fotos = [foto_url] if foto_url else []
+                
+                # Replicamos la lógica relacional para el informe general
+                lista_fotos = []
+                if foto_url:
+                    lista_fotos.append(foto_url)
+                
+                for foto_obj in rep.fotos_adicionales.all():
+                    lista_fotos.append(request.build_absolute_uri(foto_obj.foto.url))
                 
                 informe_general_data.append({
                     "id": rep.id,
@@ -513,16 +527,13 @@ class DetalleChecklistProyectoView(APIView):
             porcentaje_avance = request.data.get('porcentaje_avance')
             nota_labor = request.data.get('notas_progreso') or request.data.get('nota_labor') or request.data.get('notes_progreso') or ""
             
-            # Soportamos tanto 'foto' como 'foto_evidencia' según lo envíe la petición HTTP de la App
-            foto_evidencia = request.FILES.get('foto') or request.FILES.get('foto_evidencia')
-
-            # 🔍 Validar existencia de la etapa usando el modelo real: EtapaProyecto
+            # 🔍 Validar existencia de la etapa
             try:
                 etapa = EtapaProyecto.objects.get(id=etapa_id, proyecto_id=proyecto_id)
             except EtapaProyecto.DoesNotExist:
                 return Response({"error": "La etapa especificada no pertenece a este proyecto."}, status=status.HTTP_404_NOT_FOUND)
 
-            # 🛠️ Validar y procesar porcentaje de avance
+            # 🛠️ Validar porcentaje de avance
             try:
                 porcentaje_int = int(porcentaje_avance)
                 if not (0 <= porcentaje_int <= 100):
@@ -535,15 +546,26 @@ class DetalleChecklistProyectoView(APIView):
             etapa.notas_progreso = nota_labor  
             etapa.save()
 
-            # 2. Generar la bitácora histórica vinculando al usuario autenticado (request.user)
-            # Todo mapeado exactamente con los nombres de campos de tu modelo original
+            # 2. Generar el reporte base (Guardamos sin archivo en 'foto_evidencia' para usar la nueva tabla)
             nuevo_reporte = ReporteAvanceDiario.objects.create(
                 etapa=etapa,
                 usuario=request.user,  
                 porcentaje_al_momento=porcentaje_int,
-                nota_labor=nota_labor,
-                foto_evidencia=foto_evidencia
+                nota_labor=nota_labor
             )
+
+            # 📸 CAPTURA MULTIPLE Y GALERÍA NATIVA
+            # Usamos .getlist() para capturar todas las fotos enviadas en el FormData bajo la misma clave
+            fotos_recibidas = request.FILES.getlist('foto') or request.FILES.getlist('foto_evidencia')
+
+            # Si se enviaron fotos, las iteramos y guardamos en la tabla relacional
+            if fotos_recibidas:
+                for foto_archivo in fotos_recibidas:
+                    FotoEvidenciaReporte.objects.create(
+                        reporte=nuevo_reporte,
+                        foto=foto_archivo
+                    )
+                print(f"Se registraron {len(fotos_recibidas)} fotos para el reporte {nuevo_reporte.id}")
 
             return Response({
                 "mensaje": "Reporte diario asentado correctamente.",

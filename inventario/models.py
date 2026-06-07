@@ -290,3 +290,21 @@ class ReporteAvanceDiario(models.Model):
 
     def __str__(self):
         return f"{self.etapa.nombre_etapa} - {self.fecha_reporte.strftime('%d/%m/%Y')}"
+
+
+class FotoEvidenciaReporte(models.Model):
+    reporte = models.ForeignKey(
+        ReporteAvanceDiario, 
+        on_delete=models.CASCADE, 
+        related_name='fotos_adicionales'
+    )
+    foto = models.ImageField(upload_to='evidencias/fotos/%Y/%m/%d/')
+    fecha_subida = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['id']
+        verbose_name = "Foto de Evidencia"
+        verbose_name_plural = "Fotos de Evidencias"
+
+    def __str__(self):
+        return f"Foto {self.id} - Reporte {self.reporte.id}"
